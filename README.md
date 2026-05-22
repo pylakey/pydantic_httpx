@@ -168,6 +168,48 @@ async def create_post():
         print(post.id)  # 101
 ```
 
+### Bring your own `httpx.AsyncClient`
+
+Need event hooks, a custom transport, `httpx.Auth`, `http2=True`, custom
+`Limits`, or proxy config? Build the `httpx.AsyncClient` yourself and hand
+it to `Client(httpx_client=...)`.
+
+```python
+import httpx
+from pydantic_httpx import Client
+
+
+async def on_request(request: httpx.Request) -> None:
+    print(f"-> {request.method} {request.url}")
+
+
+async def on_response(response: httpx.Response) -> None:
+    print(f"<- {response.status_code} {response.request.url}")
+
+
+external = httpx.AsyncClient(
+    base_url='https://api.example.com',
+    http2=True,
+    event_hooks={'request': [on_request], 'response': [on_response]},
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+)
+
+async def main():
+    # We do NOT close the user-supplied client — caller owns its lifecycle.
+    async with Client(httpx_client=external) as client:
+        result = await client.get('/v1/things', response_model=list[Thing])
+    # external is still alive here
+    await external.aclose()
+```
+
+When `httpx_client=` is provided, the transport-level kwargs
+(`base_url`, `headers`, `cookies`, `params`) are **rejected** with a clear
+`ValueError` — configure them on the `AsyncClient` itself. `bearer_token=`
+still works (it's auth, not transport config); `response_class=` /
+`error_response_models=` / `timeout=` / `follow_redirects=` are
+pydantic_httpx-level concerns and behave as usual (the last two are
+ignored when you bring your own client).
+
 ### Bearer-token authentication
 
 ```python
@@ -425,14 +467,15 @@ async def main():
 Client(
     base_url='',
     *,
+    httpx_client=None,     # httpx.AsyncClient — bring your own for hooks/transports/etc.
     headers=None,          # dict | pydantic model
     cookies=None,          # dict | pydantic model
     params=None,           # dict | pydantic model
     error_response_models=None,    # {status: pydantic model}
     bearer_token=None,     # str | pydantic.SecretStr
     response_class=PydanticModelResponseClass,
-    timeout=300.0,
-    follow_redirects=True,
+    timeout=300.0,         # ignored when httpx_client is provided
+    follow_redirects=True, # ignored when httpx_client is provided
 )
 
 # Per-request methods (all async, all accept the same kwargs):

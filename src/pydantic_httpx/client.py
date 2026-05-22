@@ -53,6 +53,7 @@ class Client:
             self,
             base_url: str = "",
             *,
+            httpx_client: httpx.AsyncClient | None = None,
             headers: Headers | None = None,
             cookies: Cookies | None = None,
             params: Params | None = None,
@@ -62,28 +63,57 @@ class Client:
             timeout: float = DEFAULT_TIMEOUT,
             follow_redirects: bool = True,
     ):
+        """
+        :param httpx_client: A fully pre-configured ``httpx.AsyncClient`` to use
+            instead of letting this class build one. Useful for attaching
+            ``event_hooks``, a custom ``transport``, ``httpx.Auth`` subclasses,
+            ``http2=True``, custom ``Limits``, proxies, etc. When supplied,
+            the user owns the client's lifecycle — :meth:`close` will NOT
+            close it, and the conflicting transport-level kwargs ``base_url``,
+            ``headers``, ``cookies``, ``params`` are rejected (configure them
+            on the ``AsyncClient`` directly). ``timeout`` and
+            ``follow_redirects`` are silently ignored in this mode.
+        """
         self.logger = logging.getLogger("pydantic_httpx.Client")
-
-        default_headers = encode_headers(headers) or {}
-        default_cookies = encode_cookies(cookies) or {}
-        default_params = encode_params(params) or {}
-
-        if bearer_token is not None:
-            if isinstance(bearer_token, pydantic.SecretStr):
-                bearer_token = bearer_token.get_secret_value()
-
-            default_headers["Authorization"] = f"Bearer {bearer_token}"
 
         self._error_response_models: ErrorResponseModels = error_response_models or {}
         self._response_class: type[ResponseClass] = response_class
-        self._client = httpx.AsyncClient(
-            base_url=base_url or "",
-            headers=default_headers,
-            cookies=default_cookies,
-            params=default_params,
-            timeout=timeout,
-            follow_redirects=follow_redirects,
-        )
+
+        if httpx_client is not None:
+            conflicting = [
+                name
+                for name, value in (
+                    ("base_url", base_url),
+                    ("headers", headers),
+                    ("cookies", cookies),
+                    ("params", params),
+                )
+                if value
+            ]
+            if conflicting:
+                raise ValueError(
+                    f"Cannot combine httpx_client= with {conflicting}; "
+                    "configure these on the httpx.AsyncClient instance directly."
+                )
+            self._client = httpx_client
+            self._owns_client = False
+        else:
+            self._client = httpx.AsyncClient(
+                base_url=base_url or "",
+                headers=encode_headers(headers) or {},
+                cookies=encode_cookies(cookies) or {},
+                params=encode_params(params) or {},
+                timeout=timeout,
+                follow_redirects=follow_redirects,
+            )
+            self._owns_client = True
+
+        # bearer_token applies regardless of client ownership — it's auth,
+        # not transport-level configuration.
+        if bearer_token is not None:
+            if isinstance(bearer_token, pydantic.SecretStr):
+                bearer_token = bearer_token.get_secret_value()
+            self._client.headers["Authorization"] = f"Bearer {bearer_token}"
 
     @property
     def httpx_client(self) -> httpx.AsyncClient:
@@ -515,7 +545,9 @@ class Client:
         )
 
     async def close(self) -> None:
-        await self._client.aclose()
+        # User-supplied httpx clients stay alive — the caller owns them.
+        if self._owns_client:
+            await self._client.aclose()
 
     async def __aenter__(self) -> "Client":
         return self

@@ -452,6 +452,113 @@ class TestFiles:
 # Lifecycle
 # ---------------------------------------------------------------------------
 
+class TestHttpxClientInjection:
+    async def test_passes_through_user_supplied_client(self):
+        # User configures httpx however they want (transport, hooks, http2, ...).
+        # We just adopt it.
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"id": 1, "name": "x"})
+
+        external = httpx.AsyncClient(
+            base_url="http://api.test",
+            transport=httpx.MockTransport(handler),
+        )
+        client = ph.Client(httpx_client=external)
+
+        async with client:
+            item = await client.get("/items/1", response_model=Item)
+        assert item == Item(id=1, name="x")
+        assert seen[0].url.path == "/items/1"
+
+        # Client must NOT have closed the externally-owned httpx client.
+        assert not external.is_closed
+        await external.aclose()
+
+    async def test_event_hooks_fire_with_user_client(self):
+        # The motivating use case: caller wants request/response hooks for
+        # logging, metrics, tracing, etc. Our wrapper transparently goes through
+        # `self._client.request(...)`, so the hooks fire on every call.
+        request_hits: list[str] = []
+        response_hits: list[int] = []
+
+        async def on_request(request: httpx.Request) -> None:
+            request_hits.append(str(request.url))
+
+        async def on_response(response: httpx.Response) -> None:
+            response_hits.append(response.status_code)
+
+        external = httpx.AsyncClient(
+            base_url="http://api.test",
+            transport=httpx.MockTransport(
+                lambda req: httpx.Response(200, json={"id": 1, "name": "x"})
+            ),
+            event_hooks={"request": [on_request], "response": [on_response]},
+        )
+
+        async with ph.Client(httpx_client=external) as client:
+            await client.get("/hooked", response_model=Item)
+            await client.get("/again", response_model=Item)
+
+        assert request_hits == ["http://api.test/hooked", "http://api.test/again"]
+        assert response_hits == [200, 200]
+
+        await external.aclose()
+
+    async def test_close_does_not_close_user_client(self):
+        external = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+        )
+        client = ph.Client(httpx_client=external)
+        await client.close()
+        assert not external.is_closed
+        await external.aclose()
+
+    async def test_aexit_does_not_close_user_client(self):
+        external = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+        )
+        async with ph.Client(httpx_client=external):
+            pass
+        assert not external.is_closed
+        await external.aclose()
+
+    async def test_bearer_token_still_applied_to_user_client(self):
+        captured: list[httpx.Headers] = []
+
+        def echo(request: httpx.Request) -> httpx.Response:
+            captured.append(request.headers)
+            return httpx.Response(200, json={})
+
+        external = httpx.AsyncClient(
+            base_url="http://api.test",
+            transport=httpx.MockTransport(echo),
+        )
+        async with ph.Client(httpx_client=external, bearer_token="t0k3n") as client:
+            await client.get("/x", response_class=ph.JSONResponseClass)
+
+        assert captured[0]["authorization"] == "Bearer t0k3n"
+        await external.aclose()
+
+    @pytest.mark.parametrize(
+        "conflicting_kwargs",
+        [
+            {"base_url": "http://other.test"},
+            {"headers": {"X-A": "1"}},
+            {"cookies": {"sid": "abc"}},
+            {"params": {"v": "1"}},
+        ],
+        ids=["base_url", "headers", "cookies", "params"],
+    )
+    def test_rejects_conflicting_transport_kwargs(self, conflicting_kwargs):
+        # Silent overrides would confuse users — raise on conflict instead.
+        external = httpx.AsyncClient()
+        with pytest.raises(ValueError, match="httpx_client"):
+            ph.Client(httpx_client=external, **conflicting_kwargs)
+
+
 class TestLifecycle:
     async def test_context_manager_closes_client(self, make_client, routes):
         client = make_client(routes({}))
