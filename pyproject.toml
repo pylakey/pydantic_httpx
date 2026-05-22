@@ -1,10 +1,29 @@
 [project]
 name = "pydantic-httpx"
 version = "0.1.0"
-description = "Add your description here"
+description = "Async HTTP client built on httpx + pydantic v2 with first-class Server-Sent Events support."
 readme = "README.md"
+license = "MIT"
 authors = [{ name = "Pylakey", email = "pylakey@protonmail.com" }]
 requires-python = ">=3.11"
+keywords = ["httpx", "pydantic", "sse", "server-sent-events", "async", "http-client", "api-client"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Framework :: Pydantic",
+    "Framework :: Pydantic :: 2",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "aiofiles>=25.1.0",
     "brotlipy>=0.7.0",
