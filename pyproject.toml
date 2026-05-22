@@ -1,0 +1,44 @@
+[project]
+name = "pydantic-httpx"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Pylakey", email = "pylakey@protonmail.com" }]
+requires-python = ">=3.11"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "brotlipy>=0.7.0",
+    "httpx>=0.28.1",
+    "httpx-sse>=0.4.3",
+    "pydantic>=2.7.0,<3",
+    "pydantic-extra-types>=2.11.1",
+    "ujson>=5.12.1",
+    "zstandard>=0.25.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.14",
+    "ty>=0.0.38",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    # Integration tests hit a real public API and require internet — opt-in via -m integration.
+    "-m", "not integration",
+]
+markers = [
+    "integration: tests that hit a real API over the network (skipped by default; run with `pytest -m integration`)",
+]
