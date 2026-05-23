@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json as stdjson
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import pydantic
@@ -34,6 +35,18 @@ class Filter(pydantic.BaseModel):
     q: str
     active: bool = True
     limit: int = 10
+
+
+class TaggedPayload(pydantic.BaseModel):
+    value: str
+
+
+class TaggedTask(pydantic.BaseModel):
+    # Literal field with a default — the standard tagged-union pattern
+    # emitted by OpenAPI / datamodel-code-generator. Its value is set via
+    # the default, so it is NOT in ``model_fields_set``.
+    kind: Literal["tagged"] = "tagged"
+    payload: TaggedPayload
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +265,108 @@ class TestRequests:
         body = captured[0].decode()
         assert "username=alice" in body
         assert "age=30" in body
+
+    async def test_body_keeps_defaulted_fields_on_the_wire(self, make_client, routes):
+        # By default, a model field that received its value from a default
+        # (and is therefore not in ``model_fields_set``) must still be
+        # serialized into the request body — required for tagged-union /
+        # discriminator patterns where the tag is a defaulted literal.
+        seen: list[dict] = []
+
+        def echo(request):
+            seen.append(stdjson.loads(request.content))
+            return httpx.Response(200, json={})
+
+        client = make_client(routes({("POST", "/x"): echo}))
+        async with client:
+            await client.post(
+                "/x",
+                body=TaggedTask(payload=TaggedPayload(value="v")),
+                response_class=ph.JSONResponseClass,
+            )
+
+        assert seen[0] == {"kind": "tagged", "payload": {"value": "v"}}
+
+    async def test_body_per_request_exclude_unset_drops_defaults(self, make_client, routes):
+        seen: list[dict] = []
+
+        def echo(request):
+            seen.append(stdjson.loads(request.content))
+            return httpx.Response(200, json={})
+
+        client = make_client(routes({("POST", "/x"): echo}))
+        async with client:
+            await client.post(
+                "/x",
+                body=TaggedTask(payload=TaggedPayload(value="v")),
+                body_exclude_unset=True,
+                response_class=ph.JSONResponseClass,
+            )
+
+        assert seen[0] == {"payload": {"value": "v"}}
+
+    async def test_body_client_level_exclude_unset_applies(self, make_client, routes):
+        seen: list[dict] = []
+
+        def echo(request):
+            seen.append(stdjson.loads(request.content))
+            return httpx.Response(200, json={})
+
+        client = make_client(
+            routes({("POST", "/x"): echo}),
+            body_exclude_unset=True,
+        )
+        async with client:
+            await client.post(
+                "/x",
+                body=TaggedTask(payload=TaggedPayload(value="v")),
+                response_class=ph.JSONResponseClass,
+            )
+
+        assert seen[0] == {"payload": {"value": "v"}}
+
+    async def test_body_per_request_override_beats_client_default(self, make_client, routes):
+        seen: list[dict] = []
+
+        def echo(request):
+            seen.append(stdjson.loads(request.content))
+            return httpx.Response(200, json={})
+
+        client = make_client(
+            routes({("POST", "/x"): echo}),
+            body_exclude_unset=True,
+        )
+        async with client:
+            await client.post(
+                "/x",
+                body=TaggedTask(payload=TaggedPayload(value="v")),
+                body_exclude_unset=False,
+                response_class=ph.JSONResponseClass,
+            )
+
+        assert seen[0] == {"kind": "tagged", "payload": {"value": "v"}}
+
+    async def test_body_exclude_none_strips_nulls(self, make_client, routes):
+        class Maybe(pydantic.BaseModel):
+            a: int
+            b: int | None = None
+
+        seen: list[dict] = []
+
+        def echo(request):
+            seen.append(stdjson.loads(request.content))
+            return httpx.Response(200, json={})
+
+        client = make_client(routes({("POST", "/x"): echo}))
+        async with client:
+            await client.post(
+                "/x",
+                body=Maybe(a=1, b=None),
+                body_exclude_none=True,
+                response_class=ph.JSONResponseClass,
+            )
+
+        assert seen[0] == {"a": 1}
 
     async def test_per_request_headers_merge_with_defaults(self, make_client, routes):
         captured: list[httpx.Headers] = []

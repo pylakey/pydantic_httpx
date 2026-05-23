@@ -62,6 +62,9 @@ class Client:
             response_class: type[ResponseClass] = PydanticModelResponseClass,
             timeout: float = DEFAULT_TIMEOUT,
             follow_redirects: bool = True,
+            body_exclude_unset: bool = False,
+            body_exclude_defaults: bool = False,
+            body_exclude_none: bool = False,
     ):
         """
         :param httpx_client: A fully pre-configured ``httpx.AsyncClient`` to use
@@ -73,11 +76,23 @@ class Client:
             ``headers``, ``cookies``, ``params`` are rejected (configure them
             on the ``AsyncClient`` directly). ``timeout`` and
             ``follow_redirects`` are silently ignored in this mode.
+        :param body_exclude_unset: Default for ``model_dump(exclude_unset=...)``
+            when serializing pydantic-model request bodies. Defaults to
+            ``False`` so literal-discriminator fields with defaults (the
+            standard tagged-union pattern produced by OpenAPI codegens) are
+            not stripped from the wire. Overridable per-request.
+        :param body_exclude_defaults: Default for ``exclude_defaults`` when
+            dumping request bodies. Overridable per-request.
+        :param body_exclude_none: Default for ``exclude_none`` when dumping
+            request bodies. Overridable per-request.
         """
         self.logger = logging.getLogger("pydantic_httpx.Client")
 
         self._error_response_models: ErrorResponseModels = error_response_models or {}
         self._response_class: type[ResponseClass] = response_class
+        self._body_exclude_unset = body_exclude_unset
+        self._body_exclude_defaults = body_exclude_defaults
+        self._body_exclude_none = body_exclude_none
 
         if httpx_client is not None:
             conflicting = [
@@ -166,6 +181,9 @@ class Client:
             cookies: Cookies | None = None,
             params: Params | None = None,
             timeout: float | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {}
 
@@ -182,7 +200,19 @@ class Client:
             kwargs["params"] = encoded_params
 
         if body is not None:
-            kwargs["json"] = to_jsonable(body, by_alias=True, exclude_unset=True)
+            kwargs["json"] = to_jsonable(
+                body,
+                by_alias=True,
+                exclude_unset=(
+                    self._body_exclude_unset if body_exclude_unset is None else body_exclude_unset
+                ),
+                exclude_defaults=(
+                    self._body_exclude_defaults if body_exclude_defaults is None else body_exclude_defaults
+                ),
+                exclude_none=(
+                    self._body_exclude_none if body_exclude_none is None else body_exclude_none
+                ),
+            )
 
         if data is not None:
             kwargs["data"] = data
@@ -214,6 +244,9 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
             **response_class_parse_kwargs: Any,
     ) -> ResponseType | None:
         response_class = response_class or self._response_class
@@ -230,6 +263,9 @@ class Client:
             cookies=cookies,
             params=params,
             timeout=timeout,
+            body_exclude_unset=body_exclude_unset,
+            body_exclude_defaults=body_exclude_defaults,
+            body_exclude_none=body_exclude_none,
         )
 
         if getattr(response_class, "streamed", False):
@@ -267,6 +303,9 @@ class Client:
             event_class: type[SSEEventClass] | None = None,
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
             **event_class_parse_kwargs: Any,
     ) -> AsyncIterator[Any]:
         """Open a Server-Sent Events stream and yield parsed events.
@@ -296,6 +335,9 @@ class Client:
             cookies=cookies,
             params=params,
             timeout=timeout,
+            body_exclude_unset=body_exclude_unset,
+            body_exclude_defaults=body_exclude_defaults,
+            body_exclude_none=body_exclude_none,
         )
 
         async with aconnect_sse(self._client, method, path, **request_kwargs) as event_source:
@@ -437,6 +479,9 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
     ) -> ResponseType | None:
         return await self.request(
             "POST",
@@ -452,6 +497,9 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            body_exclude_unset=body_exclude_unset,
+            body_exclude_defaults=body_exclude_defaults,
+            body_exclude_none=body_exclude_none,
         )
 
     async def patch(
@@ -468,6 +516,9 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
     ) -> ResponseType | None:
         return await self.request(
             "PATCH",
@@ -482,6 +533,9 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            body_exclude_unset=body_exclude_unset,
+            body_exclude_defaults=body_exclude_defaults,
+            body_exclude_none=body_exclude_none,
         )
 
     async def put(
@@ -498,6 +552,9 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
     ) -> ResponseType | None:
         return await self.request(
             "PUT",
@@ -512,6 +569,9 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            body_exclude_unset=body_exclude_unset,
+            body_exclude_defaults=body_exclude_defaults,
+            body_exclude_none=body_exclude_none,
         )
 
     async def delete(
@@ -528,6 +588,9 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            body_exclude_unset: bool | None = None,
+            body_exclude_defaults: bool | None = None,
+            body_exclude_none: bool | None = None,
     ) -> ResponseType | None:
         return await self.request(
             "DELETE",
@@ -542,6 +605,9 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            body_exclude_unset=body_exclude_unset,
+            body_exclude_defaults=body_exclude_defaults,
+            body_exclude_none=body_exclude_none,
         )
 
     async def close(self) -> None:
