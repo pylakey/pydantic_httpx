@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-httpx"
-version = "0.3.0"
+version = "0.3.1"
 description = "Async HTTP client built on httpx + pydantic v2 with first-class Server-Sent Events support."
 readme = "README.md"
 license = "MIT"
@@ -26,13 +26,21 @@ classifiers = [
 ]
 dependencies = [
     "aiofiles>=25.1.0",
-    "brotlipy>=0.7.0",
     "httpx>=0.28.1",
     "httpx-sse>=0.4.3",
     "pydantic>=2.7.0,<3",
     "pydantic-extra-types>=2.11.1",
     "ujson>=5.12.1",
     "zstandard>=0.25.0",
+]
+
+[project.optional-dependencies]
+# Optional Brotli (`Content-Encoding: br`) support for httpx. Mirrors `httpx[brotli]`:
+# maintained `brotli` (Google, prebuilt wheels incl. arm64-macOS) on CPython, `brotlicffi`
+# (the maintained successor to brotlipy) on PyPy. Install via `pydantic-httpx[brotli]`.
+brotli = [
+    "brotli>=1.1.0; platform_python_implementation == 'CPython'",
+    "brotlicffi>=1.1.0.0; platform_python_implementation != 'CPython'",
 ]
 
 [build-system]
