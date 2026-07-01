@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-httpx"
-version = "0.3.1"
+version = "0.4.0"
 description = "Async HTTP client built on httpx + pydantic v2 with first-class Server-Sent Events support."
 readme = "README.md"
 license = "MIT"
