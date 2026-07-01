@@ -11,7 +11,7 @@ It is the successor of [pydantic_aiohttp](https://github.com/pylakey/pydantic_ai
 * Typed exceptions for every standard HTTP status (`HTTPNotFound`, `HTTPUnauthorized`, ...) and per-status pydantic error payloads via `error_response_models`.
 * **Server-Sent Events** as an `async for` iterator — yields validated pydantic models when `response_model=` is set.
 * Streaming file download / chunked upload via `aiofiles`.
-* Pluggable parsers — `ResponseClass` for whole-response parsing, `SSEEventClass` for individual SSE frames.
+* Pluggable parsers — `ResponseClass` for whole-response parsing, `SSEEventClass` for individual SSE frames, `ErrorResponseClass` for error-payload parsing.
 * Modern Python: targets 3.11+, uses PEP 604 / PEP 585 syntax, no `typing.Optional`/`Union`/`List`/`Dict`.
 
 ## Installation
@@ -283,6 +283,62 @@ specific call. If the body cannot be parsed against the model (or isn't JSON
 at all), `pydantic_httpx.ResponseParseError` is raised with the raw body
 preserved on `.raw_response`.
 
+### Custom error parsing with `error_response_class`
+
+`error_response_models` is convenient, but it's all-or-nothing: if the body
+doesn't validate against the registered model, you get `ResponseParseError`
+instead of the status-based exception — you lose the status code along the
+way. `error_response_class` is the escape hatch: it's the error-side twin of
+`response_class`, a pluggable `ErrorResponseClass` whose `parse()` returns
+whatever payload should be attached to the raised `HTTPNotAcceptable` /
+`HTTPNotFound` / ... exception. Since you write `parse()` yourself, you can
+validate against a typed model on the happy path and gracefully fall back to
+the raw body otherwise, so the status-based exception is still raised with
+the status code preserved — never `ResponseParseError`.
+
+```python
+import httpx
+import pydantic
+import pydantic_httpx as ph
+
+
+class ApiError(pydantic.BaseModel):
+    code: str
+    detail: str | None = None
+
+
+class MyErrorParser(ph.ErrorResponseClass):
+    async def parse(self):
+        # Happy path: a typed error payload.
+        try:
+            return ApiError.model_validate_json(self.response.content)
+        except (pydantic.ValidationError, ValueError):
+            # Non-conforming body (e.g. an infra HTML 502): fall back to the raw
+            # body so the status-based exception is still raised with the status
+            # code — never ResponseParseError.
+            try:
+                return self.response.json()
+            except ValueError:
+                return self.response.text or None
+
+
+client = ph.Client(base_url="https://api.example.com", error_response_class=MyErrorParser)
+
+try:
+    await client.get("/thing")
+except ph.HTTPError as e:
+    # e is the status-based exception (HTTPNotAcceptable, HTTPNotFound, ...).
+    if isinstance(e.response, ApiError):
+        print(e.response.code)
+    print(e.status_code)
+```
+
+`error_response_class=DefaultErrorResponseClass` is the client-wide default and
+reproduces the `error_response_models` behavior described above. Like
+`response_class`, `error_response_class` can also be passed per-request
+(`client.get(..., error_response_class=MyErrorParser)`), overriding the
+client-wide default for that call only.
+
 ### Downloading files
 
 ```python
@@ -472,6 +528,7 @@ Client(
     cookies=None,          # dict | pydantic model
     params=None,           # dict | pydantic model
     error_response_models=None,    # {status: pydantic model}
+    error_response_class=DefaultErrorResponseClass,
     bearer_token=None,     # str | pydantic.SecretStr
     response_class=PydanticModelResponseClass,
     timeout=300.0,         # ignored when httpx_client is provided
@@ -490,6 +547,7 @@ client.get / post / put / patch / delete(
     response_model=None,
     response_class=None,
     error_response_models=None,
+    error_response_class=None,
     timeout=None,
 )
 
@@ -506,6 +564,7 @@ client.sse(
     response_model=None,
     event_class=None,
     error_response_models=None,
+    error_response_class=None,
     timeout=None,
 )
 ```
