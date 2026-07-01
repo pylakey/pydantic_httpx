@@ -11,7 +11,9 @@ import httpx
 import pydantic
 from httpx_sse import ServerSentEvent
 
+from .errors import ResponseParseError
 from .types import EmptyResponse
+from .types import ErrorResponseModels
 from .utils import DEFAULT_DOWNLOAD_CHUNK_SIZE
 
 ResponseContentType = TypeVar('ResponseContentType')
@@ -79,6 +81,45 @@ class PydanticModelResponseClass(ResponseClass[PydanticModel]):
 
         # validate_json parses + validates in one pass (faster than json() + validate_python)
         return pydantic.TypeAdapter(response_model).validate_json(self.response.content)
+
+
+class ErrorResponseClass(abc.ABC):
+    """Parses an error (status >= 400) response into the payload attached to the
+    raised HTTP exception. Symmetric to :class:`ResponseClass`, but for the error
+    branch: ``parse()`` RETURNS the payload; the :class:`Client` selects and raises
+    the status-based exception. ``parse()`` may itself raise (e.g.
+    :class:`ResponseParseError`) to abort with a non-HTTP error."""
+
+    def __init__(
+        self,
+        response: httpx.Response,
+        *,
+        error_response_models: ErrorResponseModels | None = None,
+    ):
+        self.response = response
+        self.error_response_models = error_response_models or {}
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    @abc.abstractmethod
+    async def parse(self) -> Any:
+        ...
+
+
+class DefaultErrorResponseClass(ErrorResponseClass):
+    """Reproduces the historical ``_parse_response_error`` payload logic."""
+
+    async def parse(self) -> Any:
+        raw = self.response.content
+        model = self.error_response_models.get(self.response.status_code)
+        if model is not None:
+            try:
+                return pydantic.TypeAdapter(model).validate_json(raw)
+            except (pydantic.ValidationError, ValueError):
+                raise ResponseParseError(raw_response=raw.decode(errors="replace"))
+        try:
+            return self.response.json()
+        except ValueError:
+            return self.response.text or None
 
 
 class StreamResponseClass(ResponseClass[PathLikeT]):

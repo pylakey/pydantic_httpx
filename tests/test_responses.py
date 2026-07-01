@@ -166,3 +166,56 @@ class TestSSEEventClasses:
 
     async def test_plain_text_event_class_returns_data(self, event):
         assert await PlainTextSSEEventClass(event).parse() == '{"delta": "hello", "index": 0}'
+
+
+class TestDefaultErrorResponseClass:
+    async def test_returns_validated_model_when_registered(self):
+        import httpx
+        import pydantic
+        import pydantic_httpx as ph
+
+        class ApiError(pydantic.BaseModel):
+            code: str
+
+        resp = httpx.Response(401, json={"code": "unauth"})
+        parser = ph.DefaultErrorResponseClass(resp, error_response_models={401: ApiError})
+        payload = await parser.parse()
+        assert isinstance(payload, ApiError)
+        assert payload.code == "unauth"
+
+    async def test_raises_response_parse_error_on_mismatch(self):
+        import httpx
+        import pydantic
+        import pydantic_httpx as ph
+
+        class ApiError(pydantic.BaseModel):
+            code: str
+
+        resp = httpx.Response(401, json={"wrong": "x"})
+        parser = ph.DefaultErrorResponseClass(resp, error_response_models={401: ApiError})
+        with pytest.raises(ph.ResponseParseError):
+            await parser.parse()
+
+    async def test_json_fallback_without_model(self):
+        import httpx
+        import pydantic_httpx as ph
+
+        resp = httpx.Response(404, json={"detail": "nope"})
+        parser = ph.DefaultErrorResponseClass(resp)
+        assert await parser.parse() == {"detail": "nope"}
+
+    async def test_text_fallback_for_non_json(self):
+        import httpx
+        import pydantic_httpx as ph
+
+        resp = httpx.Response(500, content=b"<html>oops</html>", headers={"content-type": "text/html"})
+        parser = ph.DefaultErrorResponseClass(resp)
+        assert await parser.parse() == "<html>oops</html>"
+
+    async def test_none_for_empty_body(self):
+        import httpx
+        import pydantic_httpx as ph
+
+        resp = httpx.Response(404, content=b"")
+        parser = ph.DefaultErrorResponseClass(resp)
+        assert await parser.parse() is None

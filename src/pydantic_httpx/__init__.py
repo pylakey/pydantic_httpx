@@ -58,6 +58,8 @@ from .errors import HTTPUpgradeRequired
 from .errors import HTTPUseProxy
 from .errors import HTTPVariantAlsoNegotiates
 from .errors import ResponseParseError
+from .responses import DefaultErrorResponseClass
+from .responses import ErrorResponseClass
 from .responses import JSONResponseClass
 from .responses import JSONSSEEventClass
 from .responses import NoneResponseClass
@@ -158,6 +160,8 @@ __all__ = [
     'JSONResponseClass',
     'PydanticModelResponseClass',
     'StreamResponseClass',
+    'ErrorResponseClass',
+    'DefaultErrorResponseClass',
 
     # SSE
     'SSEEvent',
