@@ -492,6 +492,68 @@ class TestErrors:
                 # ApiError requires `code` + `detail` — payload doesn't match.
                 await client.get("/u", error_response_models={401: ApiError}, response_model=Item)
 
+    async def test_custom_error_response_class_returns_typed_payload(self, make_client, routes):
+        import pydantic_httpx as ph
+
+        class FixedError(pydantic.BaseModel):
+            kind: str
+
+        class MyErrorParser(ph.ErrorResponseClass):
+            async def parse(self):
+                return FixedError(kind="frozen")
+
+        handler = routes({("GET", "/u"): lambda r: httpx.Response(406, content=b"anything")})
+        client = make_client(handler, error_response_class=MyErrorParser)
+        async with client:
+            with pytest.raises(ph.HTTPNotAcceptable) as exc_info:
+                await client.get("/u", response_model=Item)
+        assert isinstance(exc_info.value.response, FixedError)
+        assert exc_info.value.response.kind == "frozen"
+        assert exc_info.value.status_code == 406
+
+    async def test_per_request_error_response_class_override(self, make_client, routes):
+        import pydantic_httpx as ph
+
+        class Tagged(pydantic.BaseModel):
+            tag: str
+
+        class ParserA(ph.ErrorResponseClass):
+            async def parse(self):
+                return Tagged(tag="A")
+
+        class ParserB(ph.ErrorResponseClass):
+            async def parse(self):
+                return Tagged(tag="B")
+
+        handler = routes({("GET", "/u"): lambda r: httpx.Response(404, content=b"x")})
+        client = make_client(handler, error_response_class=ParserA)
+        async with client:
+            with pytest.raises(ph.HTTPNotFound) as exc_info:
+                await client.get("/u", response_model=Item, error_response_class=ParserB)
+        assert exc_info.value.response == Tagged(tag="B")
+
+    async def test_graceful_parser_never_raises_response_parse_error(self, make_client, routes):
+        import pydantic_httpx as ph
+
+        class GracefulParser(ph.ErrorResponseClass):
+            async def parse(self):
+                try:
+                    return self.response.json()
+                except ValueError:
+                    return self.response.text or None
+
+        handler = routes({
+            ("GET", "/u"): lambda r: httpx.Response(
+                406, content=b"<html>frozen</html>", headers={"content-type": "text/html"}
+            ),
+        })
+        client = make_client(handler, error_response_class=GracefulParser)
+        async with client:
+            with pytest.raises(ph.HTTPNotAcceptable) as exc_info:
+                await client.get("/u", response_model=Item)
+        assert exc_info.value.response == "<html>frozen</html>"
+        assert exc_info.value.status_code == 406
+
 
 # ---------------------------------------------------------------------------
 # File transfer

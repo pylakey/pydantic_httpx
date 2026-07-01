@@ -106,7 +106,9 @@ class ErrorResponseClass(abc.ABC):
 
 
 class DefaultErrorResponseClass(ErrorResponseClass):
-    """Reproduces the historical ``_parse_response_error`` payload logic."""
+    """Reproduces the historical error-payload branch. The caller
+    (``Client._parse_response_error``) reads the body first; this class only
+    builds the payload."""
 
     async def parse(self) -> Any:
         raw = self.response.content

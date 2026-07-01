@@ -16,8 +16,9 @@ from .encoders import encode_headers
 from .encoders import encode_params
 from .encoders import to_jsonable
 from .errors import HTTPError
-from .errors import ResponseParseError
 from .errors import errors_classes
+from .responses import DefaultErrorResponseClass
+from .responses import ErrorResponseClass
 from .responses import PydanticModelResponseClass
 from .responses import ResponseClass
 from .responses import SSEEventClass
@@ -60,6 +61,7 @@ class Client:
             error_response_models: ErrorResponseModels | None = None,
             bearer_token: str | pydantic.SecretStr | None = None,
             response_class: type[ResponseClass] = PydanticModelResponseClass,
+            error_response_class: type[ErrorResponseClass] = DefaultErrorResponseClass,
             timeout: float = DEFAULT_TIMEOUT,
             follow_redirects: bool = True,
             body_exclude_unset: bool = False,
@@ -90,6 +92,7 @@ class Client:
 
         self._error_response_models: ErrorResponseModels = error_response_models or {}
         self._response_class: type[ResponseClass] = response_class
+        self._error_response_class: type[ErrorResponseClass] = error_response_class
         self._body_exclude_unset = body_exclude_unset
         self._body_exclude_defaults = body_exclude_defaults
         self._body_exclude_none = body_exclude_none
@@ -139,35 +142,16 @@ class Client:
             self,
             response: httpx.Response,
             error_response_models: ErrorResponseModels | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
     ) -> None:
         # Streaming responses (client.stream / aconnect_sse) may not be read yet.
         if not response.is_closed:
             await response.aread()
 
         merged_models = self._error_response_models | (error_response_models or {})
+        parser_cls = error_response_class or self._error_response_class
+        payload = await parser_cls(response, error_response_models=merged_models).parse()
         error_class = errors_classes.get(response.status_code, HTTPError)
-        error_response_model = merged_models.get(response.status_code)
-
-        raw = response.content
-
-        if error_response_model is not None:
-            # User opted into a typed error payload — a parse/validation
-            # failure here is a contract mismatch on their side, so surface
-            # it explicitly instead of silently falling back to a typed
-            # HTTP exception with a different shape.
-            try:
-                payload: Any = pydantic.TypeAdapter(error_response_model).validate_json(raw)
-            except (pydantic.ValidationError, ValueError):
-                raise ResponseParseError(raw_response=raw.decode(errors='replace'))
-        else:
-            # Best-effort decode. We never swallow the status-based exception
-            # just because the body happens not to be JSON — a 404 with an
-            # empty body must still raise `HTTPNotFound`, not `ResponseParseError`.
-            try:
-                payload = response.json()
-            except ValueError:
-                payload = response.text or None
-
         raise error_class(payload)
 
     def _build_request_kwargs(
@@ -244,6 +228,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             body_exclude_unset: bool | None = None,
             body_exclude_defaults: bool | None = None,
             body_exclude_none: bool | None = None,
@@ -271,7 +256,11 @@ class Client:
         if getattr(response_class, "streamed", False):
             async with self._client.stream(method, path, **request_kwargs) as response:
                 if response.status_code >= 400:
-                    await self._parse_response_error(response, error_response_models=error_response_models)
+                    await self._parse_response_error(
+                        response,
+                        error_response_models=error_response_models,
+                        error_response_class=error_response_class,
+                    )
 
                 return await response_class(response).parse(
                     response_model=response_model,
@@ -281,7 +270,11 @@ class Client:
         response = await self._client.request(method, path, **request_kwargs)
 
         if response.status_code >= 400:
-            await self._parse_response_error(response, error_response_models=error_response_models)
+            await self._parse_response_error(
+                response,
+                error_response_models=error_response_models,
+                error_response_class=error_response_class,
+            )
 
         return await response_class(response).parse(
             response_model=response_model,
@@ -303,6 +296,7 @@ class Client:
             event_class: type[SSEEventClass] | None = None,
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             body_exclude_unset: bool | None = None,
             body_exclude_defaults: bool | None = None,
             body_exclude_none: bool | None = None,
@@ -344,7 +338,11 @@ class Client:
             response = event_source.response
 
             if response.status_code >= 400:
-                await self._parse_response_error(response, error_response_models=error_response_models)
+                await self._parse_response_error(
+                    response,
+                    error_response_models=error_response_models,
+                    error_response_class=error_response_class,
+                )
 
             async for raw_event in event_source.aiter_sse():
                 yield await event_class(raw_event).parse(
@@ -362,6 +360,7 @@ class Client:
             params: Params | None = None,
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             chunk_size: int = DEFAULT_DOWNLOAD_CHUNK_SIZE,
     ) -> PathLikeT:
         result = await self.request(
@@ -373,6 +372,7 @@ class Client:
             timeout=timeout,
             response_class=StreamResponseClass,
             error_response_models=error_response_models,
+            error_response_class=error_response_class,
             filepath=filepath,
             chunk_size=chunk_size,
         )
@@ -392,6 +392,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
     ) -> ResponseType | None:
         # Read the file in a worker thread so the event loop stays responsive —
         # the alternative (passing a sync file handle to httpx) would block the
@@ -412,6 +413,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
         )
 
     async def stream_file(
@@ -426,6 +428,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
     ) -> ResponseType | None:
         return await self.request(
             'POST',
@@ -438,6 +441,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
         )
 
     async def get(
@@ -451,6 +455,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
     ) -> ResponseType | None:
         return await self.request(
             "GET",
@@ -462,6 +467,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
         )
 
     async def post(
@@ -479,6 +485,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             body_exclude_unset: bool | None = None,
             body_exclude_defaults: bool | None = None,
             body_exclude_none: bool | None = None,
@@ -497,6 +504,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
             body_exclude_unset=body_exclude_unset,
             body_exclude_defaults=body_exclude_defaults,
             body_exclude_none=body_exclude_none,
@@ -516,6 +524,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             body_exclude_unset: bool | None = None,
             body_exclude_defaults: bool | None = None,
             body_exclude_none: bool | None = None,
@@ -533,6 +542,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
             body_exclude_unset=body_exclude_unset,
             body_exclude_defaults=body_exclude_defaults,
             body_exclude_none=body_exclude_none,
@@ -552,6 +562,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             body_exclude_unset: bool | None = None,
             body_exclude_defaults: bool | None = None,
             body_exclude_none: bool | None = None,
@@ -569,6 +580,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
             body_exclude_unset=body_exclude_unset,
             body_exclude_defaults=body_exclude_defaults,
             body_exclude_none=body_exclude_none,
@@ -588,6 +600,7 @@ class Client:
             timeout: float | None = None,
             error_response_models: ErrorResponseModels | None = None,
             response_class: type[ResponseClass] | None = None,
+            error_response_class: type[ErrorResponseClass] | None = None,
             body_exclude_unset: bool | None = None,
             body_exclude_defaults: bool | None = None,
             body_exclude_none: bool | None = None,
@@ -605,6 +618,7 @@ class Client:
             timeout=timeout,
             error_response_models=error_response_models,
             response_class=response_class,
+            error_response_class=error_response_class,
             body_exclude_unset=body_exclude_unset,
             body_exclude_defaults=body_exclude_defaults,
             body_exclude_none=body_exclude_none,
