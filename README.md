@@ -297,7 +297,8 @@ the raw body otherwise, so the status-based exception is still raised with
 the status code preserved — never `ResponseParseError`.
 
 ```python
-import httpx
+import asyncio
+
 import pydantic
 import pydantic_httpx as ph
 
@@ -322,15 +323,21 @@ class MyErrorParser(ph.ErrorResponseClass):
                 return self.response.text or None
 
 
-client = ph.Client(base_url="https://api.example.com", error_response_class=MyErrorParser)
+async def main():
+    async with ph.Client(
+        base_url='https://api.example.com',
+        error_response_class=MyErrorParser,
+    ) as client:
+        try:
+            await client.get('/thing')
+        except ph.HTTPError as e:
+            # e is the status-based exception (HTTPNotAcceptable, HTTPNotFound, ...).
+            if isinstance(e.response, ApiError):
+                print(e.response.code)
+            print(e.status_code)
 
-try:
-    await client.get("/thing")
-except ph.HTTPError as e:
-    # e is the status-based exception (HTTPNotAcceptable, HTTPNotFound, ...).
-    if isinstance(e.response, ApiError):
-        print(e.response.code)
-    print(e.status_code)
+
+asyncio.run(main())
 ```
 
 `error_response_class=DefaultErrorResponseClass` is the client-wide default and
